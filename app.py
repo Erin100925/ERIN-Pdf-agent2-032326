@@ -805,19 +805,91 @@ def load_agents_yaml_once():
             safe_event("agents", "err", f"Failed reading agents.yaml: {e}")
     st.session_state["agents.yaml.raw"] = raw.strip() or DEFAULT_AGENTS_YAML
 
-
 def validate_agents_yaml(raw: str) -> Optional[AgentsConfig]:
     try:
-        parsed = yaml.safe_load(raw) or {}
+        parsed = yaml.safe_load(raw)
+
+        # 1) Normalize empty
+        if parsed is None:
+            parsed = {"agents": []}
+
+        # 2) If top-level list, treat as agents list
+        if isinstance(parsed, list):
+            parsed = {"agents": parsed}
+
+        # 3) If dict but uses steps/pipeline, normalize to agents list
+        if isinstance(parsed, dict) and "agents" not in parsed:
+            if isinstance(parsed.get("steps"), list):
+                parsed = {"agents": parsed["steps"]}
+            elif isinstance(parsed.get("pipeline"), list):
+                parsed = {"agents": parsed["pipeline"]}
+
+        # 4) At this point we expect a dict with key "agents"
+        if not isinstance(parsed, dict) or "agents" not in parsed:
+            raise ValueError(
+                "Invalid agents.yaml structure. Expected either:\n"
+                "- agents: [ ... ]\n"
+                "- agents: { agent_id: {...}, ... }\n"
+                "- or a top-level list of agents"
+            )
+
+        # 5) Handle YOUR case: agents is a mapping keyed by agent_id
+        if isinstance(parsed["agents"], dict):
+            agents_list = []
+            for agent_key, agent_body in parsed["agents"].items():
+                if not isinstance(agent_body, dict):
+                    agent_body = {}
+
+                a = dict(agent_body)  # copy
+
+                # Inject id from the mapping key if missing
+                a.setdefault("id", str(agent_key))
+
+                # Name fallback
+                a.setdefault("name", str(agent_key))
+
+                # Provide provider default if missing (your YAML doesn't define provider)
+                a.setdefault("provider", "openai")
+
+                # Map user_prompt_template -> user_prompt
+                if (not a.get("user_prompt")) and a.get("user_prompt_template"):
+                    a["user_prompt"] = str(a["user_prompt_template"]).replace("{{input}}", "{input}")
+
+                # If still missing user_prompt, keep minimal default
+                a.setdefault("user_prompt", "Analyze the provided context and output Markdown.")
+
+                agents_list.append(a)
+
+            parsed = {"agents": agents_list}
+
+        # 6) If agents is already a list, also map user_prompt_template if present
+        elif isinstance(parsed["agents"], list):
+            fixed = []
+            for item in parsed["agents"]:
+                if not isinstance(item, dict):
+                    item = {"user_prompt": str(item)}
+                a = dict(item)
+                if (not a.get("user_prompt")) and a.get("user_prompt_template"):
+                    a["user_prompt"] = str(a["user_prompt_template"]).replace("{{input}}", "{input}")
+                fixed.append(a)
+            parsed["agents"] = fixed
+
+        else:
+            raise ValueError("'agents' must be a list or a mapping (dict).")
+
+        # 7) Validate with Pydantic
         cfg = AgentsConfig(**parsed)
+
+        # 8) Provider allowlist check
         for a in cfg.agents:
             if a.provider not in PROVIDERS:
                 raise ValueError(f"Unsupported provider '{a.provider}' in agent '{a.id}'")
+
         return cfg
+
     except Exception as e:
         st.session_state["agents.last_error"] = str(e)
         return None
-
 
 def _normalize_provider(p: Optional[str]) -> str:
     p = (p or "").strip().lower()
