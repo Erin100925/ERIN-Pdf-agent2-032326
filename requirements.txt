@@ -11,3 +11,14 @@ altair
 httpx
 python-docx
 reportlab
+pydantic>=2.7,<3.0
+# Fuzzy search
+rapidfuzz>=3.9,<4.0
+# PDF handling
+PyPDF2>=3.0,<4.0
+# Local OCR path (Python Pack)
+pdf2image>=1.17,<2.0
+pytesseract>=0.3.10,<1.0
+Pillow>=10.3,<11.0
+# Visualization (Risk Radar)
+plotly>=5.22,<6.0
